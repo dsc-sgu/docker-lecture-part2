@@ -1,0 +1,6 @@
+services:
+  app:
+    build: .
+    environment:
+      DB_URL: ${DB_URL}
+      API_KEY: ${API_KEY}

@@ -1,0 +1,6 @@
+services:
+  app:
+    build: .
+    environment:
+      DB_URL: aboba
+      API_KEY: aboba
