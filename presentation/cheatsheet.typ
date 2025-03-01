@@ -850,3 +850,16 @@ docker run -p 8000:8000 -v some-volume:/data volumes-example:2.0
 $ cat /var/lib/docker/volumes/some-volume/_data/people.json
 [{"name": "string", "age": 0}, {"name": "string", "age": 0}, {"name": "string", "age": 0}]
 ```
+
+Также есть другой способ запуска контейнера с volume, который является
+рекомандуемым:
+
+```sh
+docker run -p 8000:8000 --mount type=volume,source=some-volume,target=/data volumes-example:2.0
+```
+
+Такой способ позволяет более гибко настраивать монтирование volume в
+контейнере. Например, можно указать режим доступа к volume (`rw` или `ro`),
+
+Подробнее с volume вы можете ознакомиться в документации:
+https://docs.docker.com/engine/storage/volumes/
