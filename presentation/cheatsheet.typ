@@ -863,3 +863,91 @@ docker run -p 8000:8000 --mount type=volume,source=some-volume,target=/data volu
 
 Подробнее с volume вы можете ознакомиться в документации:
 https://docs.docker.com/engine/storage/volumes/
+
+= Конфигурация при помощи файлов и bind mount
+
+Помимо переменных окружений для конфигурации можно использовать и файлы.
+Для этого можно воспользоваться bind mount. Он чем-то похож на volume,
+однако позволяет самостоятельно определять, где будут находиться файлы,
+а также позволяет монтировать единичные файлы.
+
+Однако, они не являются заменой volumes:
++ Volumes работают быстрее, чем bind mounts
++ Volumes легче переносить между разными хостами, так как не зависят
+  от хостовой файловой структуры
++ Volumes полностью управляются Docker, что упрощает их создание,
+  хранение и удаление
++ Volumes являются более изолированными, что повышает безопасность
+
+Volumes хорошо подходят для хранения, например, базы данных, в то время
+как bind mounts лучше подходят для хранения конфигурационных файлов или
+монтирования исходного кода, если мы делаем среду для разработки в Docker
+(об этом будет дальше).
+
+Напишем проект на Python, который считывает конфигурацию из json-файла:
+
+```python
+import json
+from pydantic import BaseModel
+from time import sleep
+
+
+class Settings(BaseModel):
+    db_url: str
+    api_key: str
+
+    @classmethod
+    def from_json(cls, file_path: str):
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        return cls(**data)
+
+
+def main():
+    settings = Settings.from_json('/config/settings.json')
+    print(settings, flush=True)
+
+    while True:
+        sleep(1)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Сам конфиг будет выглядеть так:
+
+```json
+{
+    "db_url": "DB",
+    "api_key": "API"
+}
+```
+
+Dockerfile будет выглядеть так:
+
+```Dockerfile
+FROM python:3.13-slim AS builder
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+ADD . /app
+WORKDIR /app
+
+RUN ["uv", "sync", "--frozen"]
+
+CMD ["uv", "run", "main.py"]
+```
+
+Давайте теперь соберём наше приложение:
+
+```sh
+docker build -t config-example:2.0 .
+```
+
+Bind mount использует очень похожий синтаксис:
+
+```sh
+docker run --mount type=bind,src=./settings.json,dst=/config/settings.json config-example:2.0
+# или
+docker run -v ./settings.json:/config/settings.json config-example:2.0
+```
