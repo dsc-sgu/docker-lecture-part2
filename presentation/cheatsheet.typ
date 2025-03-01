@@ -684,3 +684,169 @@ _Кстати, в наш .gitignore можно добавить README.md, Docke
 Для функционирования приложения внутри контейнера они не нужны. При этом директория .venv
 была создана uv при сборке образа, поэтому она тут есть, несмотря на то, что она прописана
 в .dockerignore._
+
+= Volumes
+
+Давайте вспомним наш "слоённый пирог". Наш контейнер формируется из образа, который
+в свою очередь формируется из нескольких слоёв. По итогу, самым верхним слоём
+является сам контейнер. Это единственный слой, который мы можем изменять в процессе
+выполнения. Соответственно, когда приложение работает, все изменения в файловой
+структуре, которое оно делает, сохраняются в этом слое.
+
+Однако, у такое подхода есть несколько проблем:
++ *Производительность*. Запись в файловую систему контейнера происходит медленнее,
+  чем в файловую систему хостовой машины.
++ *Сохранение данных*. Все изменения, которые делает приложение, сохраняются только
+  в контейнере. Когда контейнер удаляется, все данные теряются.
++ *Совместное использование*. Вы не сможете запустить несколько контейнеров из
+  одного образа, чтобы они могли использовать общие данные.
+
+Очевидно, что как минимум мы не хотим терять данные в случае удаления контейнера.
+
+Для решения этих проблем мы можем использовать *volumes*.
+
+== Пример использования
+
+Рассмотрим использование *volumes* на примере приложения на Python + FastAPI,
+который сохраняет данные в JSON-файл (мы воспользуемся именно JSON-файлом вместо
+БД для простоты и наглядности).
+
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+import json
+import os
+
+app = FastAPI()
+
+DATA_FILE = "/data/people.json"
+
+
+def read_people():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+
+def write_people(people):
+    with open(DATA_FILE, "w") as f:
+        json.dump(people, f)
+
+
+class Person(BaseModel):
+    name: str
+    age: int
+
+
+@app.get("/people")
+def get_people():
+    people = read_people()
+    return people
+
+
+@app.post("/people")
+def add_person(person: Person):
+    people = read_people()
+    people.append(person.dict())
+    write_people(people)
+    return {"message": "Person added successfully"}
+```
+
+Теперь напишем Dockerfile для этого приложения:
+
+```Dockerfile
+FROM python:3.13-slim AS builder
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+ADD . /app
+WORKDIR /app
+
+RUN ["uv", "sync", "--frozen"]
+RUN ["mkdir", "/data"]
+RUN ["echo", "[]", ">>", "/data/people.json"]
+
+ENTRYPOINT ["uv", "run", "uvicorn", "main:app"]
+CMD ["--host", "0.0.0.0", "--port", "8000"]
+```
+
+Соберём и запустим:
+
+```sh
+docker build -t volumes-example:1.0 .
+docker run -p 8000:8000 volumes-example:1.0
+```
+
+Вы можете протестировать приложение, используя Swagger UI, доступный
+по адресу `localhost:8000/docs`.
+
+Теперь попробуем завершить наше приложение и запустить его заново.
+В таком случае мы обнаружим, что наши данные не сохранились.
+
+Давайте теперь воспользуемся volume для сохранения данных. Но для начала
+его необходимо создать:
+
+```sh
+docker volume create some-volume
+```
+
+Теперь давайте взглянем, где Docker расположил наш volume. Для этого
+воспользуемся командой `docker volume inspect`:
+
+```sh
+docker volume inspect some-volume
+```
+
+```
+[
+    {
+        "CreatedAt": "2025-03-01T08:24:53+04:00",
+        "Driver": "local",
+        "Labels": null,
+        "Mountpoint": "/var/lib/docker/volumes/some-volume/_data",
+        "Name": "some-volume",
+        "Options": null,
+        "Scope": "local"
+    }
+]
+```
+
+Как мы можем наблюдать, Docker создал volume в директории
+`/var/lib/docker/volumes/some-volume/_data`.
+
+Если мы взглянем на содержимое этого каталога, то на данный момент
+его содержимое пусто. Давайте это недоразумение исправим: запустим наш
+контейнер с этим volume. Но для начала немного поменяем Dockerfile,
+удалив команды для создания `/data/people.json` файла:
+
+```Dockerfile
+FROM python:3.13-slim AS builder
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+ADD . /app
+WORKDIR /app
+
+RUN ["uv", "sync", "--frozen"]
+
+ENTRYPOINT ["uv", "run", "uvicorn", "main:app"]
+CMD ["--host", "0.0.0.0", "--port", "8000"]
+```
+
+```sh
+docker build -t volumes-example:2.0 .
+docker run -p 8000:8000 -v some-volume:/data volumes-example:2.0
+```
+
+Теперь также протестируем наше приложение, воспользовавшись Swagger UI
+(ну или можете вручную запросы покидать, разницы никакой, на Сваггере
+не настаиваю). После тестирования перезапустим наше приложение и увидим,
+что данные сохранились.
+
+Если же мы посмотрим на содержимое директории
+`/var/lib/docker/volumes/some-volume/_data`, то увидим, что там уже есть
+файл `people.json` с данными. Давайте глянем на его содержимое:
+
+```sh
+$ cat /var/lib/docker/volumes/some-volume/_data/people.json
+[{"name": "string", "age": 0}, {"name": "string", "age": 0}, {"name": "string", "age": 0}]
+```
